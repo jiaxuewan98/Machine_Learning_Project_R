@@ -1,0 +1,293 @@
+---
+title: "ML_HW4_Iris"
+output: html_document
+---
+
+```{r}
+library(glmnet)
+library(igraph)
+library(plyr)
+```
+
+
+```{r}
+## microfinancenance network 
+## data from BANERJEE, CHANDRASEKHAR, DUFLO, JACKSON 2012
+
+## data on 8622 households
+hh <- read.csv("microfinance_households.csv", row.names="hh")
+hh$village <- factor(hh$village)
+```
+
+
+```{r}
+## We'll kick off with a bunch of network stuff.
+## This will be covered in more detail in later lectures.
+## Get igraph off of CRAN if you don't have it
+## install.packages("igraph")
+## this is a tool for network analysis
+## (see http://igraph.sourceforge.net/)
+edges <- read.table("microfinance_edges.txt", colClasses="character")
+## edges holds connections between the household ids
+hhnet <- graph.edgelist(as.matrix(edges))
+hhnet <- as.undirected(hhnet) # two-way connections.
+
+## igraph is all about plotting.  
+V(hhnet) ## our 8000+ household vertices
+## Each vertex (node) has some attributes, and we can add more.
+V(hhnet)$village <- as.character(hh[V(hhnet),'village'])
+## we'll color them by village membership
+vilcol <- rainbow(nlevels(hh$village))
+names(vilcol) <- levels(hh$village)
+V(hhnet)$color = vilcol[V(hhnet)$village]
+## drop HH labels from plot
+V(hhnet)$label=NA
+
+# Graph plots try to force distances proportional to connectivity
+# Imagine nodes connected by elastic bands that you are pulling apart
+# The graphs can take a very long time, but I've found
+# edge.curved=FALSE speeds things up a lot.  Not sure why.
+
+## we'll use induced.subgraph and plot a couple villages 
+village1 <- induced.subgraph(hhnet, v=which(V(hhnet)$village=="1"))
+village33 <- induced.subgraph(hhnet, v=which(V(hhnet)$village=="33"))
+
+# vertex.size=3 is small.  default is 15
+plot(village1, vertex.size=3, edge.curved=FALSE)
+plot(village33, vertex.size=3, edge.curved=FALSE)
+```
+
+
+```{r}
+######  now, on to the HW
+
+## match id's
+matches <- match(rownames(hh), V(hhnet)$name)
+
+## calculate the 'degree' of each hh: 
+##number of commerce/friend/family connections
+degree <- degree(hhnet)[matches]
+names(degree) <- rownames(hh)
+degree[is.na(degree)] <- 0 # unconnected houses, not in our graph
+```
+
+
+
+
+===================================================================================
+HW-Question1
+
+
+```{r}
+## combine degree and the initial household dataframe
+degree <- as.vector(degree)
+## check the distribution of degree
+hist(degree)
+## Since it's right skewed, we transform it to square root of degree
+degree_log <- log(degree+1)
+hist(degree_log)
+hh_degree <- cbind(hh,degree_log)
+```
+
+
+
+
+
+===================================================================================
+HW-Question2
+
+
+```{r}
+# Delete loan column
+hh_degree_q2 <- hh_degree[,-1]
+# Merge levels -- village
+hh_degree_q2$village <- as.numeric(as.character(hh_degree_q2$village))
+hh_degree_q2$village[hh_degree_q2$village< 20] <- '1-20'
+hh_degree_q2$village[(hh_degree_q2$village>= 20) & (hh_degree_q2$village< 40)] <- '20-40'
+hh_degree_q2$village[(hh_degree_q2$village>= 40) & (hh_degree_q2$village< 60)] <- '40-60'
+hh_degree_q2$village[(hh_degree_q2$village>= 60) & (hh_degree_q2$village< 80)] <- '60-80'
+# Merge levels -- ownership
+hh_degree_q2$ownership[hh_degree_q2$ownership == 'LEASED'] <- 'RENTED'
+hh_degree_q2$ownership[hh_degree_q2$ownership == 'SHARE_OWNED'] <- 'OWNED'
+# Merge levels -- roof
+hh_degree_q2$roof[hh_degree_q2$roof == 'thatch'] <- 'other'
+```
+
+
+
+
+```{r}
+# creating interaction matrix
+form <- degree_log ~ .^2
+interaction_matrix <- model.matrix(form, data = hh_degree_q2)
+ncol(interaction_matrix)
+```
+
+
+
+```{r}
+# removing the intercept
+y <- hh_degree$degree
+interaction_matrix <- interaction_matrix[,-1]
+dim(interaction_matrix)
+# Remove the columns full of zero
+interaction_matrix=interaction_matrix[,-which(colSums(interaction_matrix)==0)]
+dim(interaction_matrix)
+
+# Spliting train and test
+smp_size <- floor(0.8 * nrow(interaction_matrix))
+set.seed(123)
+train_ind <- sample(seq_len(nrow(interaction_matrix)), size = smp_size)
+x_train <- interaction_matrix[train_ind, ]
+x_test <- interaction_matrix[-train_ind, ]
+y_train <- y[train_ind]
+y_test <- y[-train_ind]
+nrow(x_train)
+length(y_train)
+```
+
+
+```{r}
+# fit the lasso+cv model
+model_q2 <- cv.glmnet(x_train,y_train,alpha = 1)
+model_q2_2 <- glmnet(x_train, y_train,alpha = 1,lambda = model_q2$lambda.min)
+
+```
+
+
+```{r}
+lam_est = model_q2$lambda.min
+yhat = predict(model_q2, s = lam_est, newx = x_test)					# x.test provides data from holdout sample
+sse.test = sum((y_test - yhat)^2)									# sum of square errors in holdout sample
+sst.test = sum((y_test-mean(y_test))^2)								# total sum of squares around ybar in holdout sample
+r2 = 1-sse.test/sst.test
+r2 # R-squared equals 8%, indicating a weak fit. This means degree can hardly be explained by X, so it's reasonable to take degree as a treatment.
+```
+
+
+
+
+
+```{r}
+# Getting d_hat
+d_hat_train <- predict(model_q2_2, newx = x_train)
+d_hat_test <- yhat
+```
+
+
+
+===================================================================================
+HW-Question3
+
+```{r}
+# Getting d
+d <- hh_degree$degree_log
+d_train <- d[train_ind]
+d_test <- d[-train_ind]
+```
+
+
+```{r}
+# Getting y_loan
+y_loan_train <- hh_degree$loan[train_ind]
+y_loan_test <- hh_degree$loan[-train_ind]
+length(y_loan_train)
+length(d_train)
+#y_loan_train, x, d_train
+```
+
+
+```{r}
+penalty <- rep(1, 2+ncol(x_train))
+penalty[2] <- 0
+```
+
+
+
+
+
+```{r}
+model_q3 <- cv.glmnet(cbind(d_train,d_hat_train,x_train),y_loan_train,penalty.factor = penalty,family="binomial")
+model_q3_2 <- glmnet(cbind(d_train,d_hat_train,x_train),y_loan_train,penalty.factor = penalty,family="binomial",alpha = 1,lambda = model_q3$lambda.min)
+coef(model_q3_2)['d_train',] # The treatment effect
+```
+
+
+
+
+```{r}
+# Calculate the accuracy to see the robustness of this model
+response_q3 <-predict(model_q3_2, newx = cbind(d_test,d_hat_test,x_test), type = "response")
+response_q3 <- ifelse(response_q3 > 0.5, 1, 0)
+accuracy_model_q3 <- mean(response_q3==y_loan_test)
+accuracy_model_q3
+```
+
+
+
+
+===================================================================================
+HW-Question4
+
+
+
+
+```{r}
+x_q4=cbind(d_train,x_train)
+lasso_q4_fit=glmnet(x_q4,y_loan_train,alpha=1,family = 'binomial')
+tLL=lasso_q4_fit$nulldev-deviance(lasso_q4_fit)
+k=lasso_q4_fit$df
+n=lasso_q4_fit$nobs
+AICc=tLL+2*k+2*k*(k+1)/(n-k-1)
+index_best_lambda=which.min(AICc)
+best_lambda_aic=lasso_q4_fit$lambda[which.min(AICc)]
+model_q4 <- glmnet(x_q4,y_loan_train,family="binomial",alpha = 1,lambda=0.001)
+coef(model_q4)['d_train',]
+```
+
+
+
+
+```{r}
+# Calculating the accuracy
+response_q4 <-predict(model_q4, newx =cbind(d_test,x_test), type = "response")
+response_q4 <- ifelse(response_q4 > 0.5, 1, 0)
+accuracy_model_q4 <- mean(response_q4==y_loan_test)
+accuracy_model_q4
+```
+
+===================================================================================
+HW-Question5
+
+
+
+```{r}
+gamma <- c()
+n <- nrow(x_train)
+
+boot_y <- y_loan_train
+set.seed(123)
+for (i in 1:100) {
+  bootstrap_ind <- sample(seq(n),n,replace = TRUE)
+  d_hat_train <- predict(model_q2_2, newx = x_train[bootstrap_ind,])
+  boot_x <- cbind(d_train[bootstrap_ind], d_hat_train, x_train[bootstrap_ind,])
+  boot_model <- glmnet(boot_x,boot_y[bootstrap_ind], family = "binomial", alpha = 1, lambda = model_q3$lambda.min,  penalty.factor = penalty)
+  
+  gamma <- c(gamma,coef(boot_model)[2])
+  
+  
+}
+
+hist(gamma);abline(v=coef(model_q3_2)['d_train',],col = 2)
+sde=sqrt(sum((gamma-coef(model_q3_2)['d_train',])^2)/(100-1))
+sde
+#The standard deviation of the estimates is so small, which means our accuracy is pretty good, We would expect the coefficient of d to differ little from our estimate.
+```
+
+
+
+
+
+
+
+

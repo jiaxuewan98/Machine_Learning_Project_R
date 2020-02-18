@@ -1,0 +1,215 @@
+# PART 1
+
+This part of the problem is based on a study conducted on schools in Israel, and the research revolves around the question “Do smaller class sizes result in better grades?” You are to solve the problems using the classroom size and average grade data from class.csv and the summary statistics obtained from the original research.
+
+## Question 1
+
+Explore the data in class.csv and see whether you think grades really do depend on the class size. Please explain the reason behind your conclusion.
+
+```{r}
+
+classdata=read.csv('class.csv')
+x=classdata$class_size
+y=classdata$mean_test_score
+plot(x,y)
+lin_model=lm(y~x)
+summary(lin_model)
+
+```
+
+## Question 2
+
+Have a look at the summary statistics of the original research. Explain in detail (tell us about the steps you would follow), how you would have tackled the question of class sizes resulting in better grades using RDD.
+
+## Question 3
+
+Try to use the data from question 1 and apply the procedure you described in question 2 (maybe a simple version of what you described) to estimate the effect of performance on class size? What is your conclusion?
+
+```{r}
+# install.packages('rddtools')
+library(rddtools)
+rdd_class=rdd_data(y,x,cutpoint = 30)
+plot(rdd_class)
+rdd_mod=rdd_reg_lm(rdd_object=rdd_class,slope='same')
+summary(rdd_mod)
+plot(rdd_mod)
+
+rdd_mod=rdd_reg_lm(rdd_object=rdd_class,slope='separate')
+summary(rdd_mod)
+plot(rdd_mod)
+```
+
+
+
+
+
+
+# PART 2
+
+This data originally appeared in Gentzkow and Shapiro (GS; 2010) and considers text of the 2005 Congressional Record, containing all speeches in that year for members of the United States House and Senate. In particular, GS record the number times each of 529 legislators used terms in a list of 1000 phrases (i.e., each document is a year of transcripts for a single speaker). It also includes the ideology of each speaker –
+Party: (Republican, Democrat, or Independent)
+repshare: share of constituents voting for Bush in 2004
+Based on the congress.RData that has been shared, solve the following questions.
+
+## Question 1
+
+Fit K-means to the speech text of the members, comprising of the 1000 phrases, for K in 5,10,15,20,25
+
+```{r}
+load("congress.rdata")
+
+x_matrix <- as.matrix(congress109Counts/rowSums(congress109Counts))
+x_congress <- scale(x_matrix)
+
+kfit <- lapply((1:5)*5, function(k) kmeans(x_congress,k))
+```
+
+
+## Question 2
+
+Use BIC to choose the K and interpret the selected model. Also use the elbow curve method to identify the most optimal value of K. Compare the two values of K that you obtained. Are they equal?
+
+```{r}
+# define kic function
+kic <- function(fit, rule=c("A","B")){
+	df <- length(fit$centers) # K*dim
+	n <- sum(fit$size)
+	D <- fit$tot.withinss # deviance
+	rule=match.arg(rule)
+	if(rule=="A")
+		return(D + 2*df*n/(n-df-1))
+	else
+		return(D + log(n)*df)
+}
+```
+
+```{r}
+# select optimal K using AICc
+kaicc <- sapply(kfit, kic, "A")
+plot(kaicc, xlab="K", ylab="AICc", col=4, 
+	 bty="n",type="l", lwd=2)
+abline(v=which.min(kaicc),col=4)
+
+
+```
+
+```{r}
+# Select optimal K using elbow rule
+deviance <- lapply(c(5,10,15,20,25), function(k) kmeans(x_congress, k)$tot.withinss)
+plot(c(5,10,15,20,25), deviance, type="l")
+```
+
+
+```{r}
+# The nither of these two methods provide a reasonale K, we we use K in 1, 2, 3, ...25 to perform the k-means again.
+kfit <- lapply(1:25, function(k) kmeans(x_congress,k))
+deviance <- lapply(1:25, function(k) kmeans(x_congress, k)$tot.withinss)
+plot(1:25, deviance, type="l")
+```
+
+
+```{r}
+# From the above plot, we observe that the first noticeable change happens at K=2. Incorporating above information and our intuition that there are two major parties in partisan, we decide to use K=2 as the optimal value.
+```
+
+
+## Question 3
+
+Fit a topic model for the speech counts. Use Bayes factors to choose the number of topics and interpret your chosen model.
+
+
+```{r}
+
+library(textir)
+library(maptpx)
+
+x <- as.simple_triplet_matrix(congress109Counts)
+tpcs <- topics(x, K=5*(1:5), verb=10)
+
+summary(tpcs, n = 10)
+
+# Top words of the first two topics
+rownames(tpcs$theta)[order(tpcs$theta[,1], decreasing=TRUE)[1:10]]
+rownames(tpcs$theta)[order(tpcs$theta[,2], decreasing=TRUE)[1:10]]
+
+# Based on Bayes Factors, we select K=10, indicating a total of 10 topics when log Bayes Factor reaches the maximum.
+```
+
+## Question 4
+
+Connect the unsupervised clusters to partisanship. Tabulate party membership by K-means cluster. Are there any non-partisan topics? Fit topic regressions for each of party and repshare. Compare to regression onto phrase percentages: x <- 100 * congress109Counts / rowSums(congress109Counts)
+
+
+```{r}
+party <- as.numeric(congress109Ideology[,"party"])
+repshare <- congress109Ideology[,"repshare"]
+
+library(glmnet)
+
+regtopics.cv <- cv.glmnet(tpcs$omega, party)
+summary(regtopics.cv)
+plot(regtopics.cv)
+
+coef(regtopics.cv)
+
+# Topics 6, 7, and 10 are non-partisan topics
+
+rownames(tpcs$theta)[order(tpcs$theta[,6], decreasing=TRUE)[1:10]]
+rownames(tpcs$theta)[order(tpcs$theta[,7], decreasing=TRUE)[1:10]]
+rownames(tpcs$theta)[order(tpcs$theta[,10], decreasing=TRUE)[1:10]]
+
+# Topic 6 is mixed but predominantly about climate and environment; 7 is about the judicial system; Topic 10 is mostly about stem cell research
+
+```
+
+```{r}
+regtopics_repshare.cv <- cv.glmnet(tpcs$omega, repshare)
+summary(regtopics_repshare.cv)
+plot(regtopics_repshare.cv)
+
+coef(regtopics_repshare.cv)
+
+# We find that representatives who spoke about Topics 1,2 and 8 had more people who did not vote for Bush in 2004 whereas those spoke about 3 and 5 had a higher share of people who did vote for Bush
+
+rownames(tpcs$theta)[order(tpcs$theta[,4], decreasing=TRUE)[1:10]]
+rownames(tpcs$theta)[order(tpcs$theta[,9], decreasing=TRUE)[1:10]]
+```
+
+
+```{r}
+# Compare to regression onto phrase percentages: x <- 100 * congress109Counts / rowSums(congress109Counts)
+# party as dependent variable
+x <- 100*congress109Counts/rowSums(congress109Counts)
+regwords.cv <- cv.glmnet(x, party)
+
+par(mfrow=c(1,2))
+plot(regtopics.cv)
+mtext("topic regression", font=2, line=2)
+plot(regwords.cv)
+mtext("bigram regression", font=2, line=2)
+
+# max OOS R^2s
+max(1-regtopics.cv$cvm/regtopics.cv$cvm[1])
+max(1-regwords.cv$cvm/regwords.cv$cvm[1])
+```
+
+
+```{r}
+# Compare to regression onto phrase percentages: x <- 100 * congress109Counts / rowSums(congress109Counts)
+# repshare as dependent variable
+x <- 100*congress109Counts/rowSums(congress109Counts)
+regwords_repshare.cv <- hcv.glmnet(x, repshare)
+
+par(mfrow=c(1,2))
+plot(regtopics_repshare.cv)
+mtext("topic regression", font=2, line=2)
+plot(regwords_repshare.cv)
+mtext("bigram regression", font=2, line=2)
+
+# max OOS R^2s
+max(1-regtopics_repshare.cv$cvm/regtopics.cv$cvm[1])
+max(1-regwords_repshare.cv$cvm/regwords.cv$cvm[1])
+```
+
+
+
